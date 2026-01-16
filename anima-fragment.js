@@ -31,11 +31,70 @@ const CONFIG = {
     hpMultiplier: 10,        // ブロックのHP計算用倍率（ステージ数 × この値 が最大HP）
 };
 
+/**
+ * AUDIO MANAGER
+ * 音の重なりや再生頻度を管理
+ */
+class AudioManager {
+    constructor() {
+        this.hitSoundPath = './sounds/c.mp3';
+        this.destroySoundPath = './sounds/d.mp3';
+        
+        // 音声を使い回すための「プール」を作成
+        this.hitPool = this.createPool(this.hitSoundPath, 15);     // ヒット音用：最大15同時再生
+        this.destroyPool = this.createPool(this.destroySoundPath, 5); // 破壊音用：最大5同時再生
+        
+        this.hitIndex = 0;
+        this.destroyIndex = 0;
+        this.lastPlayTime = 0;
+        this.minInterval = 50; 
+    }
+
+    // 指定された数だけAudioオブジェクトを事前に生成
+    createPool(path, size) {
+        const pool = [];
+        for (let i = 0; i < size; i++) {
+            const audio = new Audio(path);
+            audio.load(); // データを事前に読み込む
+            pool.push(audio);
+        }
+        return pool;
+    }
+
+    play(type, volume = 0.2) {
+        const now = Date.now();
+        
+        // ヒット音の過剰な再生を防止
+        if (type === 'hit') {
+            if (now - this.lastPlayTime < this.minInterval) return;
+            
+            // プールから順番に1つ選んで再生
+            const audio = this.hitPool[this.hitIndex];
+            audio.volume = volume;
+            audio.currentTime = 0; // 再生位置を先頭に戻す
+            audio.play().catch(() => {});
+            
+            this.hitIndex = (this.hitIndex + 1) % this.hitPool.length;
+            this.lastPlayTime = now;
+        } 
+        else if (type === 'destroy') {
+            const audio = this.destroyPool[this.destroyIndex];
+            audio.volume = volume;
+            audio.currentTime = 0;
+            audio.play().catch(() => {});
+            
+            this.destroyIndex = (this.destroyIndex + 1) % this.destroyPool.length;
+        }
+    }
+}
+const audio = new AudioManager();
+
 class Game {
     constructor() {
         this.canvas = document.getElementById('gameCanvas');
         this.ctx = this.canvas.getContext('2d');
         
+        this.isStarted = false;
         this.stage = 1;
         this.blocks = [];
         this.lifeForms = [];
@@ -56,9 +115,45 @@ class Game {
 
         window.addEventListener('resize', () => this.resize());
 
+        const startScreen = document.getElementById('startScreen');
+        startScreen.addEventListener('click', () => {
+            if (!this.isStarted) {
+                this.start();
+                startScreen.style.display = 'none';
+            }
+        });
+
         this.initStage();
         this.spawnLifeForms();
+        
+        this.drawInitialFrame();
+    }
+
+    start() {
+        this.isStarted = true;
+        this.stats.startTime = Date.now();
+        
+        // ダミー再生でブラウザの音声ロックを解除
+        const silentAudio = new Audio();
+        silentAudio.play().catch(()=>{});
+        
+        // ループ開始
         this.loop();
+    }
+
+    drawInitialFrame() {
+        this.ctx.fillStyle = CONFIG.bgColor;
+        this.ctx.fillRect(0, 0, this.width, this.height);
+        this.drawAura();
+        this.blocks.forEach(b => b.draw(this.ctx));
+        // 生命体は描画のみ（動かさない）
+        this.lifeForms.forEach(lf => {
+            const hue = (lf.level * 45) % 360;
+            this.ctx.fillStyle = `hsl(${hue}, 80%, 50%, 0.3)`;
+            this.ctx.beginPath();
+            this.ctx.arc(lf.x, lf.y, CONFIG.lifeBaseSize + lf.level, 0, Math.PI * 2);
+            this.ctx.fill();
+        });
     }
 
     resize() {
@@ -125,6 +220,8 @@ class Game {
     }
 
     loop() {
+        if (!this.isStarted) return;
+
         this.ctx.fillStyle = CONFIG.bgColor;
         this.ctx.fillRect(0, 0, this.width, this.height);
 
@@ -194,61 +291,60 @@ class Game {
         this.ctx.restore();
     }
 
-drawUI() {
+    drawUI() {
         const centerX = this.width / 2;
         const centerY = this.height / 2;
         const currentTotalHp = this.blocks.reduce((sum, b) => sum + b.hp, 0);
         const progress = 1 - (currentTotalHp / this.stats.initialTotalHp || 0);
-        const dps = this.getAverageDPS();
+        const dps = Math.floor(this.getAverageDPS()); // 小数点を切り捨て
         const uptime = Math.floor((Date.now() - this.stats.startTime) / 1000);
-        const mvpLevel = Math.max(...this.lifeForms.map(lf => lf.level));
+        const maxUnitLevel = Math.max(...this.lifeForms.map(lf => lf.level));
         const totalAttack = this.lifeForms.reduce((s, l) => s + l.attack, 0);
 
-        // 1. 進捗バー（最上部）
+        // 1. 進捗バー
         const barW = 400, barH = 2;
-        const barY = 30; // バーの位置
+        const barY = 30;
         this.ctx.fillStyle = '#111';
         this.ctx.fillRect(centerX - barW/2, barY, barW, barH);
         this.ctx.shadowBlur = 10;
-        this.ctx.shadowColor = 'rgba(0, 255, 0, 0.5)'; // 少し抑えめの緑
+        this.ctx.shadowColor = 'rgba(0, 255, 0, 0.5)';
         this.ctx.fillStyle = '#0f0';
         this.ctx.fillRect(centerX - barW/2, barY, barW * progress, barH);
         this.ctx.shadowBlur = 0;
 
-        // 2. プロジェクト名（タイトル）: バーとPHASEの間
-        const titleY = barY + 60; // バーの少し下に配置
+        // 2. プロジェクト名
+        const titleY = barY + 60;
         this.ctx.textAlign = 'center';
-        // 目に優しい柔らかな発光
         this.ctx.shadowBlur = 15;
         this.ctx.shadowColor = 'rgba(0, 200, 255, 0.3)';
         this.ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
         this.ctx.font = 'bold 32px "Courier New", monospace';
-        this.ctx.letterSpacing = "8px"; // 文字間隔を広げて高級感を出す
+        this.ctx.letterSpacing = "8px";
         this.ctx.fillText("ANIMA FRAGMENT", centerX, titleY);
-        this.ctx.letterSpacing = "0px"; // 元に戻す
+        this.ctx.letterSpacing = "0px";
         this.ctx.shadowBlur = 0;
 
-        // 3. PHASE表示（中央より少し上）
+        // 3. PHASE表示
         const phaseY = centerY - 80; 
         this.ctx.textAlign = 'center';
         this.ctx.fillStyle = 'rgba(0, 200, 255, 0.1)';
         this.ctx.font = 'bold 85px "Courier New", monospace';
-        this.ctx.fillText(`PHASE_${this.stage}`, centerX, phaseY);
+        this.ctx.fillText(`PHASE_${this.stage.toLocaleString()}`, centerX, phaseY);
 
-        // 4. スタッツ情報（中央付近）
-        this.ctx.font = '18px "Courier New", monospace';
+        // 4. スタッツ情報（名称の変更とカンマ区切り適用）
+        this.ctx.font = '16px "Courier New", monospace'; // 項目名が長くなったので少しフォントを調整
         const statsLineY = phaseY + 40;
         const spacing = 28;
         const columnGap = 12;
 
         const data = [
-            [this.lifeForms.length.toString(), "UNITS_ACTIVE"],
-            [this.stats.destroyedBlocks.toString(), "BLOCKS_CLEARED"],
-            [this.stats.totalHits.toString(), "SYSTEM_HITS"],
+            [this.lifeForms.length.toLocaleString(), "UNITS_ACTIVE"],
+            [this.stats.destroyedBlocks.toLocaleString(), "BLOCKS_DESTROYED"], // CLEARED -> DESTROYED
+            [this.stats.totalHits.toLocaleString(), "CONTACT_HITS"],          // SYSTEM_HITS -> CONTACT_HITS
             [this.stats.totalDamage.toLocaleString(), "TOTAL_DAMAGE"],
-            [dps.toFixed(1) + "/s", "DMG_VELOCITY"],
-            [totalAttack.toString(), "ATK_POTENTIAL"],
-            ["LV." + mvpLevel, "MAX_LEVEL"],
+            [dps.toLocaleString() + "/s", "DAMAGE_PER_SEC"],                  // DMG_VELOCITY -> DAMAGE_PER_SEC
+            [totalAttack.toLocaleString(), "TOTAL_ATTACK_PWR"],               // ATK_POTENTIAL -> TOTAL_ATTACK_PWR
+            ["LV." + maxUnitLevel.toLocaleString(), "MAX_UNIT_LEVEL"],        // MAX_LEVEL -> MAX_UNIT_LEVEL
             [this.formatTime(uptime), "SYSTEM_UPTIME"]
         ];
 
@@ -288,22 +384,47 @@ class Block {
         this.w = CONFIG.blockWidth; this.h = CONFIG.blockHeight;
         this.hp = hp; this.isDead = false;
         this.color = '';
+        this.hitEffect = 0;
     }
+
     takeDamage(damage) {
         this.hp -= damage;
-        if (this.hp <= 0) this.isDead = true;
+        this.hitEffect = 1.0;
+        
+        if (this.hp <= 0) {
+            this.isDead = true;
+            // 引数をパスではなくキーワードに変更
+            audio.play('destroy', 0.4); 
+        } else {
+            audio.play('hit', 0.15); 
+        }
     }
+
     draw(ctx) {
         const hue = (200 + this.hp) % 360;
         this.color = `hsl(${hue}, 80%, 40%)`;
+        
+        if (this.hitEffect > 0) {
+            ctx.save();
+            ctx.shadowBlur = 15 * this.hitEffect;
+            ctx.shadowColor = `hsl(${hue}, 100%, 70%)`;
+            ctx.strokeStyle = `rgba(255, 255, 255, ${this.hitEffect})`;
+            ctx.lineWidth = 2;
+            ctx.strokeRect(this.x - 2, this.y - 2, this.w + 4, this.h + 4);
+            ctx.restore();
+            this.hitEffect *= 0.9;
+            if (this.hitEffect < 0.01) this.hitEffect = 0;
+        }
+
         ctx.fillStyle = this.color;
         ctx.strokeStyle = `hsl(${hue}, 100%, 70%)`;
         ctx.fillRect(this.x, this.y, this.w, this.h);
         ctx.strokeRect(this.x, this.y, this.w, this.h);
+        
         ctx.fillStyle = '#fff';
         ctx.font = '12px monospace';
         ctx.textAlign = 'center';
-        ctx.fillText(this.hp, this.x + this.w / 2, this.y + this.h / 2 + 4);
+        ctx.fillText(this.hp.toLocaleString(), this.x + this.w / 2, this.y + this.h / 2 + 4);
     }
 }
 
