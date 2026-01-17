@@ -83,11 +83,10 @@ class Game {
 
         this.stats = {
             destroyedBlocks: 0, totalHits: 0, totalDamage: 0,
-            startTime: Date.now(), damageHistory: [], initialTotalHp: 0  
+            startTime: Date.now(), accumulatedTime: 0, damageHistory: [], initialTotalHp: 0  
         };
 
-        // ★追加: グローバルステータス管理
-        // 各項目: {lv: 現在レベル, val: 現在値, max: 最大レベル, step: 1Lvごとの上昇値, name: 表示名}
+        // グローバルステータスのデフォルト値
         this.globalStats = {
             attack:  { lv: 1, val: 1, max: 20, step: 1, name: "ATTACK_POWER" },
             speed:   { lv: 1, val: 2.8, max: 10, step: 0.6, name: "MVMT_SPEED" },
@@ -95,10 +94,14 @@ class Game {
             maxLife: { lv: 1, val: 5, max: 10, step: 1, name: "MAX_FRAGMENTS" } 
         };
 
-        // ポイント管理
+        // ポイント管理のデフォルト値
         this.upgradePoints = 0;
-        this.maxLevelRecord = 1; // 過去最高のユニットレベル記録
-        this.hasNewPoints = false; // 新しいポイントの通知フラグ
+        this.maxLevelRecord = 1; 
+        this.hasNewPoints = false;
+
+        // ★ここでロードを実行！
+        // これにより、デフォルト値の上からセーブデータが上書きされます
+        this.loadGame();
 
         this.resize();
         this.checkScreenSize();
@@ -124,7 +127,11 @@ class Game {
         this.setupUI();
 
         this.initStage();
-        this.spawnLifeForms();
+
+        if (this.lifeForms.length === 0) {
+            this.spawnLifeForms();
+        }
+
         this.drawInitialFrame();
     }
 
@@ -132,6 +139,7 @@ class Game {
         const btn = document.getElementById('upgradeBtn');
         const modal = document.getElementById('upgradeModal');
         const close = document.getElementById('closeModal');
+        const resetBtn = document.getElementById('resetBtn');
 
         btn.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -152,6 +160,12 @@ class Game {
                 modal.style.display = 'none';
             }
         });
+
+        if (resetBtn) {
+            resetBtn.addEventListener('click', () => {
+                this.resetGame();
+            });
+        }
     }
 
     getUpgradeCost(key) {
@@ -236,6 +250,9 @@ class Game {
 
                 this.updateUpgradeList();
                 new Audio('./sounds/upgrade.mp3').play();
+
+                // セーブ
+                this.saveGame();
             }
         }
     }
@@ -402,6 +419,7 @@ class Game {
             if (this.clearTimer <= 0) {
                 this.isClearing = false;
                 this.stage++;
+                this.saveGame();
                 this.initStage();
                 this.lifeForms.forEach(lf => {
                     lf.x = CONFIG.logicalWidth / 2;
@@ -476,14 +494,18 @@ class Game {
         this.ctx.restore();
     }
 
-drawUI() {
+    drawUI() {
         const centerX = CONFIG.logicalWidth / 2;
         const centerY = CONFIG.logicalHeight / 2;
         const currentTotalHp = this.blocks.reduce((sum, b) => sum + b.hp, 0);
         const progress = 1 - (currentTotalHp / this.stats.initialTotalHp || 0);
         const dps = Math.floor(this.getAverageDPS());
-        const uptime = Math.floor((Date.now() - this.stats.startTime) / 1000);
-        const maxUnitLevel = Math.max(...this.lifeForms.map(lf => lf.level));
+
+        // ★修正点：今回のセッション時間 ＋ 過去の累計時間 を合計して秒に変換
+        const totalMs = (Date.now() - this.stats.startTime) + (this.stats.accumulatedTime || 0);
+        const uptimeSeconds = Math.floor(totalMs / 1000);
+
+        const maxUnitLevel = this.maxLevelRecord;
         const totalAttack = this.lifeForms.length * this.globalStats.attack.val;
 
         // プログレスバー
@@ -511,7 +533,7 @@ drawUI() {
             [dps.toLocaleString() + "/s", "DAMAGE_PER_SEC"],
             [totalAttack.toLocaleString(), "TOTAL_ATTACK_PWR"],
             ["LV." + maxUnitLevel.toLocaleString(), "MAX_UNIT_LEVEL"],
-            [this.formatTime(uptime), "SYSTEM_UPTIME"]
+            [this.formatTime(uptimeSeconds), "SYSTEM_UPTIME"]
         ];
 
         data.forEach((item, i) => {
@@ -528,19 +550,15 @@ drawUI() {
         const upgradeBtn = document.getElementById('upgradeBtn');
         if (upgradeBtn) {
             if (this.isClearing) {
-                // 演出中は強制的に非表示
                 upgradeBtn.style.display = 'none';
             } else {
-                // 演出中でない場合、表示条件（ポイント所持 or 過去にレベルアップ済）をチェック
                 const shouldShow = this.upgradePoints > 0 || this.maxLevelRecord > 0;
                 
                 if (shouldShow) {
-                    // 非表示状態なら再表示させる
                     if (upgradeBtn.style.display === 'none') {
                         upgradeBtn.style.display = 'inline-block';
                     }
 
-                    // 位置とサイズを計算して適用
                     const rect = this.canvas.getBoundingClientRect();
                     const scaleX = rect.width / CONFIG.logicalWidth;
                     const scaleY = rect.height / CONFIG.logicalHeight;
@@ -556,11 +574,7 @@ drawUI() {
 
         // --- ステージクリア演出描画 ---
         if (this.isClearing) {
-            const centerX = CONFIG.logicalWidth / 2;
-            const centerY = CONFIG.logicalHeight / 2;
-
             this.ctx.save();
-            // 背景を暗く
             this.ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
             this.ctx.fillRect(0, 0, CONFIG.logicalWidth, CONFIG.logicalHeight);
 
@@ -583,8 +597,12 @@ drawUI() {
     }
 
     formatTime(s) {
-        const m = Math.floor(s / 60);
+        const h = Math.floor(s / 3600);
+        const m = Math.floor((s % 3600) / 60);
         const sec = s % 60;
+        if (h > 0) {
+            return `${h}:${m.toString().padStart(2,'0')}:${sec.toString().padStart(2,'0')}`;
+        }
         return `${m.toString().padStart(2,'0')}:${sec.toString().padStart(2,'0')}`;
     }
 
@@ -593,6 +611,90 @@ drawUI() {
             const angle = Math.random() * Math.PI * 2;
             const speed = Math.random() * 3 + 1;
             this.effects.push(new Particle(x, y, Math.cos(angle)*speed, Math.sin(angle)*speed, color));
+        }
+    }
+
+    // --- セーブ＆ロード機能 ---
+    saveGame() {
+        try {
+            // 今回のセッションでの経過時間を計算
+            const sessionTime = Date.now() - this.stats.startTime;
+
+            const saveData = {
+                stage: this.stage,
+                upgradePoints: this.upgradePoints,
+                maxLevelRecord: this.maxLevelRecord,
+                globalStats: this.globalStats,
+                lifeFormLevels: this.lifeForms.map(lf => lf.level),
+                // 統計情報の保存
+                stats: {
+                    destroyedBlocks: this.stats.destroyedBlocks,
+                    totalHits: this.stats.totalHits,
+                    totalDamage: this.stats.totalDamage,
+                    // 過去の累計に今回の分を足して保存
+                    accumulatedTime: (this.stats.accumulatedTime || 0) + sessionTime
+                },
+                timestamp: Date.now()
+            };
+            localStorage.setItem('anima_fragment_save', JSON.stringify(saveData));
+            console.log("SYSTEM_DATA_SYNCED: Phase " + this.stage);
+        } catch (e) {
+            console.error("SAVE_FAILED", e);
+        }
+    }
+
+    loadGame() {
+        const rawData = localStorage.getItem('anima_fragment_save');
+        if (!rawData) return false;
+
+        try {
+            const saved = JSON.parse(rawData);
+            this.stage = saved.stage || 1;
+            this.upgradePoints = saved.upgradePoints || 0;
+            this.maxLevelRecord = saved.maxLevelRecord || 1;
+            if (saved.globalStats) this.globalStats = saved.globalStats;
+
+            // 統計情報の復元
+            if (saved.stats) {
+                this.stats.destroyedBlocks = saved.stats.destroyedBlocks || 0;
+                this.stats.totalHits = saved.stats.totalHits || 0;
+                this.stats.totalDamage = saved.stats.totalDamage || 0;
+                this.stats.accumulatedTime = saved.stats.accumulatedTime || 0;
+                // ロードした瞬間を新しい開始時刻にする
+                this.stats.startTime = Date.now();
+            }
+
+            if (saved.lifeFormLevels && saved.lifeFormLevels.length > 0) {
+                this.lifeForms = [];
+                saved.lifeFormLevels.forEach(level => {
+                    const lf = new LifeForm(CONFIG.logicalWidth / 2, CONFIG.logicalHeight / 2);
+                    lf.syncLevel(level);
+                    this.lifeForms.push(lf);
+                });
+            }
+
+            if (this.lifeForms.length > 0) {
+                const actualMax = Math.max(...this.lifeForms.map(lf => lf.level));
+                this.maxLevelRecord = Math.max(this.maxLevelRecord, actualMax);
+            }
+
+            this.updateUpgradeList();
+            console.log("SYSTEM_DATA_RESTORED: MAX_LVL=" + this.maxLevelRecord);
+            return true;
+        } catch (e) {
+            console.error("LOAD_FAILED", e);
+            return false;
+        }
+    }
+
+    resetGame() {
+        const firstCheck = confirm("【警告】すべてのフラグメント記録とアップグレードを破棄しますか？");
+        if (firstCheck) {
+            const secondCheck = confirm("本当によろしいですか？この操作は取り消せません。システムが初期状態に再起動されます。");
+            if (secondCheck) {
+                localStorage.removeItem('anima_fragment_save');
+                location.reload();
+            }
         }
     }
 }
@@ -654,6 +756,13 @@ class LifeForm {
         this.nextLevelExp = CONFIG.baseExpToLevel;
         this.particles = []; this.pulse = 0;
         this.currentTarget = null;
+    }
+
+    syncLevel(level) {
+        this.level = level;
+        this.exp = 0;
+
+        this.nextLevelExp = Math.floor(CONFIG.baseExpToLevel * Math.pow(1.5, this.level - 1));
     }
 
     getToroidalVector(targetX, targetY, screenW, screenH) {
@@ -759,10 +868,10 @@ class LifeForm {
     }
 
     levelUp() {
-        this.level++; 
-        this.exp = 0;
-        this.nextLevelExp = Math.floor(this.nextLevelExp * 1.5);
-        
+        const nextLvl = this.level + 1;
+
+        this.syncLevel(nextLvl);
+
         audio.play('evolution', 0.5);
     }
 
@@ -818,6 +927,5 @@ class Particle {
         ctx.globalAlpha = 1;
     }
 }
-
 
 window.onload = () => new Game();

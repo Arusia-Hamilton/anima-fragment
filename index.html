@@ -66,6 +66,17 @@
                 AVAILABLE POINTS: <span id="pointDisplay" style="color: #0f0; font-size: 24px; font-weight: bold;">0</span>
             </div>
             <div id="upgradeList" style="display: flex; flex-direction: column; gap: 15px;"></div>
+
+            <div class="warning-box" style="margin-top: 30px; text-align: center; border-color: rgba(255, 0, 0, 0.3);">
+                <div style="font-size: 10px; color: rgba(255, 0, 0, 0.6); margin-bottom: 5px; letter-spacing: 1px;">CRITICAL_SYSTEM_ACTION</div>
+                <button id="resetBtn" style="
+                    background: none; border: 1px solid rgba(255, 0, 0, 0.5); 
+                    color: #ff4444; cursor: pointer; font-family: 'Courier New', monospace; 
+                    padding: 5px 15px; font-size: 11px; transition: all 0.3s;
+                " onmouseover="this.style.background='rgba(255,0,0,0.1)'" onmouseout="this.style.background='none'">
+                    [ TERMINATE_ALL_DATA ]
+                </button>
+            </div>
         </div>
     </div>
 </div>
