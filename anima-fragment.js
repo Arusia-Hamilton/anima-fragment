@@ -4,33 +4,18 @@
  * ==========================================
  */
 const CONFIG = {
-    // --- 背景・画面設定 ---
-    bgColor: '#050508',      // 背景色（非常に濃い紺色）
-    logicalWidth: 1920,  // ゲーム内部の横幅（固定）
-    logicalHeight: 1080, // ゲーム内部の縦幅（固定）
+    bgColor: '#050508',
+    logicalWidth: 1920, 
+    logicalHeight: 1080,
+    blockWidth: 60, blockHeight: 30, blockPadding: 8, blockRows: 22,
+    lifeCount: 5, // 6から5に変更
+    lifeBaseSize: 8,
+    lifeTrailDensity: 4, lifeTrailLife: 12,
+    particleCount: 20, particleLife: 40,
+    baseExpToLevel: 8, hpMultiplier: 10,
     
-    // --- ブロックの設定 ---
-    blockWidth: 60,          // ブロック1つの横幅（ピクセル）
-    blockHeight: 30,         // ブロック1つの縦幅（ピクセル）
-    blockPadding: 8,         // ブロック同士の隙間の広さ
-    blockRows: 20,           // 画面内に配置するブロックの最大行数
-
-    // --- 生命体（LifeForm）の基本設定 ---
-    lifeCount: 6,            // 最初に出現する生命体の数
-    lifeBaseSize: 8,         // 生命体の基本サイズ（レベル1の時の大きさ）
-    lifeBaseSpeed: 3,        // 生命体の移動速度の初期値
-    lifeMaxSpeed: 10,        // レベルアップで上昇する速度の最大限界値
-    lifeTurnRate: 0.12,      // 旋回性能（値が大きいほどターゲットに急旋回できる）
-    
-    // --- 生命体のエフェクト（残像）設定 ---
-    lifeTrailDensity: 4,     // 残像の密度（1フレームに生成するパーティクル数）
-    lifeTrailLife: 12,       // 残像が消えるまでの時間（値を大きくすると尻尾が長くなる）
-
-    // --- 演出・ゲームバランス設定 ---
-    particleCount: 20,       // ブロック破壊時に飛び散る破片の数
-    particleLife: 40,        // 破片が消えるまでの時間
-    baseExpToLevel: 8,       // レベル2に上がるために必要な経験値（以降は倍率で増加）
-    hpMultiplier: 10,        // ブロックのHP計算用倍率（ステージ数 × この値 が最大HP）
+    lifeBaseSpeed: 3,
+    lifeMaxSpeed: 12,
 };
 
 /**
@@ -41,51 +26,40 @@ class AudioManager {
     constructor() {
         this.hitSoundPath = './sounds/impact_crystal.mp3';
         this.destroySoundPath = './sounds/fragment_shatter.mp3';
-        
-        // 音声を使い回すための「プール」を作成
-        this.hitPool = this.createPool(this.hitSoundPath, 15);     // ヒット音用：最大15同時再生
-        this.destroyPool = this.createPool(this.destroySoundPath, 5); // 破壊音用：最大5同時再生
-        
-        this.hitIndex = 0;
-        this.destroyIndex = 0;
-        this.lastPlayTime = 0;
-        this.minInterval = 50; 
-    }
+        this.evoSoundPath = './sounds/anima_evolution.mp3';
 
-    // 指定された数だけAudioオブジェクトを事前に生成
+        this.hitPool = this.createPool(this.hitSoundPath, 15);
+        this.destroyPool = this.createPool(this.destroySoundPath, 5);
+        this.evoPool = this.createPool(this.evoSoundPath, 3);
+
+        this.hitIndex = 0; this.destroyIndex = 0; this.evoIndex = 0;
+        this.lastPlayTime = 0; this.minInterval = 50; 
+    }
     createPool(path, size) {
         const pool = [];
         for (let i = 0; i < size; i++) {
-            const audio = new Audio(path);
-            audio.load(); // データを事前に読み込む
-            pool.push(audio);
+            const audio = new Audio(path); audio.load(); pool.push(audio);
         }
         return pool;
     }
-
     play(type, volume = 0.2) {
         const now = Date.now();
-        
-        // ヒット音の過剰な再生を防止
+        let targetPool, targetIndex;
         if (type === 'hit') {
             if (now - this.lastPlayTime < this.minInterval) return;
-            
-            // プールから順番に1つ選んで再生
-            const audio = this.hitPool[this.hitIndex];
-            audio.volume = volume;
-            audio.currentTime = 0; // 再生位置を先頭に戻す
-            audio.play().catch(() => {});
-            
+            targetPool = this.hitPool; targetIndex = this.hitIndex;
             this.hitIndex = (this.hitIndex + 1) % this.hitPool.length;
             this.lastPlayTime = now;
-        } 
-        else if (type === 'destroy') {
-            const audio = this.destroyPool[this.destroyIndex];
-            audio.volume = volume;
-            audio.currentTime = 0;
-            audio.play().catch(() => {});
-            
+        } else if (type === 'destroy') {
+            targetPool = this.destroyPool; targetIndex = this.destroyIndex;
             this.destroyIndex = (this.destroyIndex + 1) % this.destroyPool.length;
+        } else if (type === 'evolution') {
+            targetPool = this.evoPool; targetIndex = this.evoIndex;
+            this.evoIndex = (this.evoIndex + 1) % this.evoPool.length;
+        }
+        if (targetPool) {
+            const audio = targetPool[targetIndex];
+            audio.volume = volume; audio.currentTime = 0; audio.play().catch(()=>{});
         }
     }
 }
@@ -93,98 +67,210 @@ const audio = new AudioManager();
 
 class Game {
     constructor() {
-        // 1. 基本的なCanvasとコンテキストの初期化
         this.canvas = document.getElementById('gameCanvas');
         this.ctx = this.canvas.getContext('2d');
         
-        // 2. ゲーム状態の初期化
         this.isStarted = false;
         this.stage = 1;
         this.blocks = [];
         this.lifeForms = [];
         this.effects = [];
         this.auraRotation = 0;
+        this.isClearing = false;
+        this.clearTimer = 0;
 
-        // 3. 仮想キャンバス・スケーリング用のプロパティ
-        this.scale = 1;
-        this.offsetX = 0;
-        this.offsetY = 0;
+        this.scale = 1; this.offsetX = 0; this.offsetY = 0;
 
-        // 4. 統計データの初期化
         this.stats = {
-            destroyedBlocks: 0,
-            totalHits: 0,
-            totalDamage: 0,
-            startTime: Date.now(),
-            damageHistory: [],
-            initialTotalHp: 0  
+            destroyedBlocks: 0, totalHits: 0, totalDamage: 0,
+            startTime: Date.now(), damageHistory: [], initialTotalHp: 0  
         };
-        
-        // 5. 画面サイズの初期計算と警告チェック
-        this.resize(); 
+
+        // ★追加: グローバルステータス管理
+        // 各項目: {lv: 現在レベル, val: 現在値, max: 最大レベル, step: 1Lvごとの上昇値, name: 表示名}
+        this.globalStats = {
+            attack:  { lv: 1, val: 1, max: 20, step: 1, name: "ATTACK_POWER" },
+            speed:   { lv: 1, val: 2.8, max: 10, step: 0.6, name: "MVMT_SPEED" },
+            agility: { lv: 1, val: 0.07, max: 15, step: 0.012, name: "TURN_AGILITY" },
+            maxLife: { lv: 1, val: 5, max: 10, step: 1, name: "MAX_FRAGMENTS" } 
+        };
+
+        // ポイント管理
+        this.upgradePoints = 0;
+        this.maxLevelRecord = 1; // 過去最高のユニットレベル記録
+        this.hasNewPoints = false; // 新しいポイントの通知フラグ
+
+        this.resize();
         this.checkScreenSize();
+        window.addEventListener('resize', () => { this.resize(); this.checkScreenSize(); });
 
-        // 6. イベントリスナーの設定
-        window.addEventListener('resize', () => {
-            this.resize();
-            this.checkScreenSize(); // リサイズするたびに推奨サイズかチェック
-        });
-
-        // 7. スタート画面（オーバーレイ）の制御
+        // スタート画面イベント
         const startScreen = document.getElementById('startScreen');
-        startScreen.addEventListener('click', () => {
+        startScreen.addEventListener('click', (e) => {
+            // モーダルやボタンへのクリックが伝播しないようにする
+            if (e.target.closest('#upgradeBtn') || e.target.closest('#upgradeModal')) return;
             if (!this.isStarted) {
                 this.isStarted = true;
                 this.stats.startTime = Date.now();
-                
-                // ブラウザの音声再生制限を解除するためのダミー再生
-                const silentAudio = new Audio();
-                silentAudio.play().catch(() => {}); 
-                
-                // 画面を隠してループを開始
+                new Audio().play().catch(()=>{}); 
                 startScreen.style.display = 'none';
+                
+                // ゲーム開始時にアップグレードボタンを表示
+                document.getElementById('upgradeBtn').style.display = 'block';
                 this.loop();
             }
         });
 
-        // 8. ステージの構築と生命体の生成
+        this.setupUI();
+
         this.initStage();
         this.spawnLifeForms();
-        
-        // 9. 開始前の静止画面を一度だけ描画
         this.drawInitialFrame();
+    }
+
+    setupUI() {
+        const btn = document.getElementById('upgradeBtn');
+        const modal = document.getElementById('upgradeModal');
+        const close = document.getElementById('closeModal');
+
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.updateUpgradeList();
+            modal.style.display = 'flex';
+            
+            this.hasNewPoints = false;
+            const badge = document.getElementById('notifyBadge');
+            if (badge) badge.style.display = 'none';
+        });
+
+        close.addEventListener('click', () => {
+            modal.style.display = 'none';
+        });
+
+        window.addEventListener('mousedown', (e) => {
+            if (modal.style.display === 'flex' && e.target === modal) {
+                modal.style.display = 'none';
+            }
+        });
+    }
+
+    getUpgradeCost(key) {
+        return this.globalStats[key].lv; 
+    }
+
+    // アップグレード画面の描画更新
+    updateUpgradeList() {
+        const list = document.getElementById('upgradeList');
+        const pointDisp = document.getElementById('pointDisplay');
+        const badge = document.getElementById('notifyBadge');
+        
+        pointDisp.textContent = this.upgradePoints;
+        
+        if (badge) {
+            badge.style.display = this.hasNewPoints ? 'block' : 'none';
+        }
+
+        list.innerHTML = '';
+
+        Object.keys(this.globalStats).forEach(key => {
+            const s = this.globalStats[key];
+            const isMax = s.lv >= s.max;
+            const cost = this.getUpgradeCost(key);
+            const canAfford = this.upgradePoints >= cost;
+            
+            const currentDisplay = Number.isInteger(s.val) ? s.val : s.val.toFixed(2);
+            const nextVal = isMax ? s.val : (s.val + s.step);
+            const nextDisplay = Number.isInteger(nextVal) ? nextVal : nextVal.toFixed(2);
+
+            const row = document.createElement('div');
+            row.style.cssText = "display: flex; align-items: center; justify-content: space-between; background: rgba(0, 200, 255, 0.05); padding: 10px; border: 1px solid rgba(0, 200, 255, 0.2); margin-bottom: 5px;";
+            
+            row.innerHTML = `
+                <div>
+                    <div style="color: #0ff; font-weight: bold; font-size: 16px;">${s.name} <span style="font-size:12px; color:#aaa;">LV.${s.lv}</span></div>
+                    <div style="font-size: 12px; color: #888; margin-top: 4px;">
+                        CUR: <span style="color:#fff;">${currentDisplay}</span> 
+                        ${isMax ? '<span style="color:#f00;">(MAX)</span>' : `→ NEXT: <span style="color:#0f0;">${nextDisplay}</span>`}
+                    </div>
+                </div>
+                <div style="text-align: right;">
+                    <div style="font-size: 10px; color: ${canAfford ? '#0f0' : '#f44'}; margin-bottom: 4px;">
+                        ${isMax ? '-' : `COST: ${cost} PT`}
+                    </div>
+                    <button id="btn-${key}" ${isMax || !canAfford ? 'disabled' : ''} style="
+                        background: ${isMax ? '#333' : (canAfford ? 'rgba(0, 200, 255, 0.2)' : '#222')};
+                        color: ${isMax ? '#666' : (canAfford ? '#0ff' : '#555')};
+                        border: 1px solid ${isMax ? '#444' : (canAfford ? '#0ff' : '#444')};
+                        padding: 5px 15px; cursor: ${canAfford && !isMax ? 'pointer' : 'not-allowed'};
+                        font-family: inherit; font-size: 12px; min-width: 80px;
+                    ">
+                        ${isMax ? 'MAX' : 'UPGRADE'}
+                    </button>
+                </div>
+            `;
+
+            list.appendChild(row);
+
+            if (!isMax && canAfford) {
+                const upgradeBtn = row.querySelector(`#btn-${key}`);
+                upgradeBtn.onclick = () => this.purchaseUpgrade(key);
+            }
+        });
+    }
+
+    purchaseUpgrade(key) {
+        const cost = this.getUpgradeCost(key);
+        if (this.upgradePoints >= cost) {
+            const s = this.globalStats[key];
+            if (s.lv < s.max) {
+                this.upgradePoints -= cost;
+                s.lv++;
+                s.val += s.step;
+
+                // 生命体追加の特殊処理
+                if (key === 'maxLife') {
+                    // 画面中央に新しい生命体を生成して配列に追加
+                    const newLife = new LifeForm(this.canvas.width / 2, this.canvas.height / 2);
+                    this.lifeForms.push(newLife);
+                }
+
+                this.updateUpgradeList();
+                new Audio('./sounds/upgrade.mp3').play();
+            }
+        }
+    }
+
+    checkProgression() {
+        const currentMax = this.lifeForms.reduce((max, lf) => Math.max(max, lf.level), 0);
+        if (currentMax > this.maxLevelRecord) {
+            const gain = currentMax - this.maxLevelRecord;
+            this.upgradePoints += gain;
+            this.maxLevelRecord = currentMax;
+            
+            const modal = document.getElementById('upgradeModal');
+            const isModalOpen = modal && modal.style.display === 'flex';
+
+            if (isModalOpen) {
+                // ウィンドウが開いているなら、リアルタイムでリストだけ更新（通知は出さない）
+                this.updateUpgradeList();
+            } else {
+                // ウィンドウが閉じている時にポイントが入ったら通知フラグを立てる
+                this.hasNewPoints = true;
+                const badge = document.getElementById('notifyBadge');
+                if (badge) badge.style.display = 'block';
+            }
+        }
     }
 
     checkScreenSize() {
         const warningEl = document.getElementById('sizeWarning');
         if (!warningEl) return;
-
-        const sw = window.innerWidth;
-        const sh = window.innerHeight;
-        
+        const sw = window.innerWidth; const sh = window.innerHeight;
         const isLowRes = sw < 1000 || sh < 600;
-
         if (isLowRes) {
-            // 警告：赤い装飾枠で囲み、中の文字は固定（点滅させない）
-            warningEl.style.display = 'block';
-            warningEl.innerHTML = `
-                <div class="warning-box">
-                    <span style="color: #ff4444; font-weight: bold;">[ SYSTEM WARNING ]</span><br>
-                    <span style="color: #fff; opacity: 0.9; font-size: 11px;">
-                        LOW RESOLUTION: ${sw}x${sh}<br>
-                        RECOMMENDED: 1280x720 OR HIGHER
-                    </span>
-                </div>
-            `;
+            warningEl.innerHTML = `<div class="warning-box"><span style="color: #ff4444; font-weight: bold;">[ SYSTEM WARNING ]</span><br><span style="color: #fff; opacity: 0.9; font-size: 11px;">LOW RESOLUTION: ${sw}x${sh}<br>RECOMMENDED: 1280x720 OR HIGHER</span></div>`;
         } else {
-            // 正常：枠なしで静かに表示
-            warningEl.style.display = 'block';
-            warningEl.innerHTML = `
-                <div style="color: rgba(0, 200, 255, 0.4); margin-top: 15px;">
-                    RESOLUTION: ${sw}x${sh} [ OK ]<br>
-                    SYSTEM CALIBRATION COMPLETE
-                </div>
-            `;
+            warningEl.innerHTML = `<div style="color: rgba(0, 200, 255, 0.4); margin-top: 15px;">RESOLUTION: ${sw}x${sh} [ OK ]<br>SYSTEM CALIBRATION COMPLETE</div>`;
         }
     }
 
@@ -266,27 +352,27 @@ class Game {
     }
 
     updateDPS(damage) {
-        const now = Date.now();
         this.stats.totalDamage += damage;
-        this.stats.totalHits += 1;
-        this.stats.damageHistory.push({ time: now, val: damage });
+        this.stats.totalHits++;
+        this.stats.damageHistory.push({ t: Date.now(), d: damage });
     }
 
     getAverageDPS() {
         const now = Date.now();
-        this.stats.damageHistory = this.stats.damageHistory.filter(d => now - d.time < 1000);
-        return this.stats.damageHistory.reduce((sum, d) => sum + d.val, 0);
+        this.stats.damageHistory.push({ t: now, d: 0 }); // ダミー挿入で時間管理
+        this.stats.damageHistory = this.stats.damageHistory.filter(h => now - h.t < 1000);
+        return this.stats.damageHistory.reduce((s, h) => s + h.d, 0);
     }
 
     loop() {
         if (!this.isStarted) return;
+        
+        this.checkProgression();
 
-        // 1. 全体クリア（物理座標）
         this.ctx.setTransform(1, 0, 0, 1, 0, 0);
         this.ctx.fillStyle = CONFIG.bgColor;
         this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
-        // 2. 仮想空間の描画開始
         this.ctx.save();
         this.ctx.translate(this.offsetX, this.offsetY);
         this.ctx.scale(this.scale, this.scale);
@@ -294,7 +380,51 @@ class Game {
         this.drawAura();
         this.drawUI();
 
-        // ブロック更新
+        // --- クリア演出の処理ここから ---
+        if (this.isClearing) {
+            this.clearTimer--;
+            
+            // 演出が始まった瞬間、HTML UIを強制的に非表示にする
+            const upgradeBtn = document.getElementById('upgradeBtn');
+            const upgradeModal = document.getElementById('upgradeModal');
+            if (upgradeBtn) upgradeBtn.style.display = 'none';      // ボタンを隠す
+            if (upgradeModal) upgradeModal.style.display = 'none';  // ウィンドウを閉じる
+
+            // 演出エフェクト
+            if (this.clearTimer % 10 === 0) {
+                this.createExplosion(
+                    CONFIG.logicalWidth / 2 + (Math.random() - 0.5) * 400,
+                    CONFIG.logicalHeight / 2 + (Math.random() - 0.5) * 400,
+                    '#0ff'
+                );
+            }
+
+            if (this.clearTimer <= 0) {
+                this.isClearing = false;
+                this.stage++;
+                this.initStage();
+                this.lifeForms.forEach(lf => {
+                    lf.x = CONFIG.logicalWidth / 2;
+                    lf.y = CONFIG.logicalHeight / 2;
+                    lf.currentTarget = null;
+                });
+
+                // ★追加: 演出終了後、ポイントがあればボタンを再表示させる
+                if (this.upgradePoints > 0 || this.maxLevelRecord > 0) {
+                    const upgradeBtn = document.getElementById('upgradeBtn');
+                    if (upgradeBtn) upgradeBtn.style.display = 'inline-block';
+                }
+            }
+        } else {
+            // 通常時：ブロックが全滅した瞬間にクリア演出を開始
+            if (this.blocks.length === 0) {
+                this.isClearing = true;
+                this.clearTimer = 120;
+            }
+        }
+        // --- クリア演出の処理ここまで ---
+
+        // ブロック処理（演出中も描画は続ける）
         for (let i = this.blocks.length - 1; i >= 0; i--) {
             const block = this.blocks[i];
             if (block.isDead) {
@@ -306,65 +436,47 @@ class Game {
             }
         }
 
-        // 生命体更新（仮想解像度を渡す）
+        // 生命体処理（演出中は update を止めることで静止させる）
         this.lifeForms.forEach(lf => {
-            const damageDealt = lf.update(this.blocks, CONFIG.logicalWidth, CONFIG.logicalHeight);
-            if (damageDealt > 0) this.updateDPS(damageDealt);
+            if (!this.isClearing) {
+                const damageDealt = lf.update(this.blocks, CONFIG.logicalWidth, CONFIG.logicalHeight, this.globalStats);
+                if (damageDealt > 0) this.updateDPS(damageDealt);
+            }
             lf.draw(this.ctx);
         });
 
-        // エフェクト更新
+        // エフェクト処理（爆発などは演出中も動かす）
         for (let i = this.effects.length - 1; i >= 0; i--) {
             this.effects[i].update();
             this.effects[i].draw(this.ctx);
             if (this.effects[i].life <= 0) this.effects.splice(i, 1);
         }
 
-        // 次ステージ判定
-        if (this.blocks.length === 0) {
-            this.stage++;
-            this.initStage();
-            this.lifeForms.forEach(lf => {
-                lf.x = CONFIG.logicalWidth / 2;
-                lf.y = CONFIG.logicalHeight / 2;
-                lf.currentTarget = null;
-            });
-        }
-
         this.ctx.restore();
-        // 仮想空間の描画終了
-
         requestAnimationFrame(() => this.loop());
     }
 
     drawAura() {
-        const centerX = this.width / 2;
-        const centerY = this.height / 2;
-        this.auraRotation += 0.005;
+        const cx = CONFIG.logicalWidth/2, cy = CONFIG.logicalHeight/2;
+        this.auraRotation += 0.002;
         this.ctx.save();
-        this.ctx.translate(centerX, centerY);
+        this.ctx.translate(cx, cy);
         this.ctx.rotate(this.auraRotation);
+        this.ctx.strokeStyle = 'rgba(0, 200, 255, 0.03)';
+        this.ctx.lineWidth = 2;
         this.ctx.beginPath();
-        for(let i=0; i<6; i++) {
-            const angle = i * Math.PI / 3;
-            const r = 240 + Math.sin(Date.now() * 0.002) * 10;
-            this.ctx.lineTo(Math.cos(angle) * r, Math.sin(angle) * r);
+        for(let i=0; i<6; i++){
+            this.ctx.rotate(Math.PI/3);
+            this.ctx.moveTo(300,0); this.ctx.lineTo(600,0);
         }
-        this.ctx.closePath();
-        this.ctx.strokeStyle = 'rgba(0, 200, 255, 0.12)';
-        this.ctx.lineWidth = 1.5;
         this.ctx.stroke();
-        const grad = this.ctx.createRadialGradient(0, 0, 50, 0, 0, 280);
-        grad.addColorStop(0, 'rgba(0, 80, 255, 0.08)');
-        grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
-        this.ctx.fillStyle = grad;
         this.ctx.beginPath();
-        this.ctx.arc(0, 0, 280, 0, Math.PI * 2);
-        this.ctx.fill();
+        this.ctx.arc(0,0, 450, 0, Math.PI*2);
+        this.ctx.stroke();
         this.ctx.restore();
     }
 
-    drawUI() {
+drawUI() {
         const centerX = CONFIG.logicalWidth / 2;
         const centerY = CONFIG.logicalHeight / 2;
         const currentTotalHp = this.blocks.reduce((sum, b) => sum + b.hp, 0);
@@ -372,31 +484,23 @@ class Game {
         const dps = Math.floor(this.getAverageDPS());
         const uptime = Math.floor((Date.now() - this.stats.startTime) / 1000);
         const maxUnitLevel = Math.max(...this.lifeForms.map(lf => lf.level));
-        const totalAttack = this.lifeForms.reduce((s, l) => s + l.attack, 0);
+        const totalAttack = this.lifeForms.length * this.globalStats.attack.val;
 
         // プログレスバー
         const barW = 400, barH = 2, barY = 50;
-        this.ctx.fillStyle = '#111';
-        this.ctx.fillRect(centerX - barW/2, barY, barW, barH);
-        this.ctx.fillStyle = '#0f0';
-        this.ctx.fillRect(centerX - barW/2, barY, barW * progress, barH);
+        this.ctx.fillStyle = '#111'; this.ctx.fillRect(centerX - barW/2, barY, barW, barH);
+        this.ctx.fillStyle = '#0f0'; this.ctx.fillRect(centerX - barW/2, barY, barW * progress, barH);
 
-        // タイトルロゴ
         const titleY = barY + 60;
-        this.ctx.textAlign = 'center';
-        this.ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+        this.ctx.textAlign = 'center'; this.ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
         this.ctx.font = 'bold 32px "Courier New", monospace';
-        this.ctx.letterSpacing = "8px";
         this.ctx.fillText("ANIMA FRAGMENT", centerX, titleY);
-        this.ctx.letterSpacing = "0px";
 
-        // PHASE表示
         const phaseY = centerY - 80; 
         this.ctx.fillStyle = 'rgba(0, 200, 255, 0.1)';
         this.ctx.font = 'bold 85px "Courier New", monospace';
-        this.ctx.fillText(`PHASE_${this.stage.toLocaleString()}`, centerX, phaseY);
+        this.ctx.fillText(`PHASE:${this.stage.toLocaleString()}`, centerX, phaseY);
 
-        // スタッツ（カンマ区切りと名称変更を反映）
         this.ctx.font = '16px "Courier New", monospace';
         const statsLineY = phaseY + 40;
         const spacing = 28;
@@ -404,7 +508,6 @@ class Game {
             [this.lifeForms.length.toLocaleString(), "UNITS_ACTIVE"],
             [this.stats.destroyedBlocks.toLocaleString(), "BLOCKS_DESTROYED"],
             [this.stats.totalHits.toLocaleString(), "CONTACT_HITS"],
-            [this.stats.totalDamage.toLocaleString(), "TOTAL_DAMAGE"],
             [dps.toLocaleString() + "/s", "DAMAGE_PER_SEC"],
             [totalAttack.toLocaleString(), "TOTAL_ATTACK_PWR"],
             ["LV." + maxUnitLevel.toLocaleString(), "MAX_UNIT_LEVEL"],
@@ -413,76 +516,109 @@ class Game {
 
         data.forEach((item, i) => {
             const y = statsLineY + (i * spacing);
-            this.ctx.textAlign = 'right';
-            this.ctx.fillStyle = '#fff';
+            this.ctx.textAlign = 'right'; this.ctx.fillStyle = '#fff';
             this.ctx.fillText(item[0], centerX - 12, y);
-            this.ctx.textAlign = 'center';
-            this.ctx.fillStyle = 'rgba(0, 200, 255, 0.5)';
+            this.ctx.textAlign = 'center'; this.ctx.fillStyle = 'rgba(0, 200, 255, 0.5)';
             this.ctx.fillText(":", centerX, y);
-            this.ctx.textAlign = 'left';
-            this.ctx.fillStyle = 'rgba(0, 200, 255, 0.7)';
+            this.ctx.textAlign = 'left'; this.ctx.fillStyle = 'rgba(0, 200, 255, 0.7)';
             this.ctx.fillText(item[1], centerX + 12, y);
         });
+
+        // --- ボタンの位置調整と再表示制御 ---
+        const upgradeBtn = document.getElementById('upgradeBtn');
+        if (upgradeBtn) {
+            if (this.isClearing) {
+                // 演出中は強制的に非表示
+                upgradeBtn.style.display = 'none';
+            } else {
+                // 演出中でない場合、表示条件（ポイント所持 or 過去にレベルアップ済）をチェック
+                const shouldShow = this.upgradePoints > 0 || this.maxLevelRecord > 0;
+                
+                if (shouldShow) {
+                    // 非表示状態なら再表示させる
+                    if (upgradeBtn.style.display === 'none') {
+                        upgradeBtn.style.display = 'inline-block';
+                    }
+
+                    // 位置とサイズを計算して適用
+                    const rect = this.canvas.getBoundingClientRect();
+                    const scaleX = rect.width / CONFIG.logicalWidth;
+                    const scaleY = rect.height / CONFIG.logicalHeight;
+                    const lastLineY = statsLineY + (data.length - 1) * spacing;
+                    const btnY = lastLineY + 30;
+                    
+                    upgradeBtn.style.left = `${rect.left + centerX * scaleX}px`;
+                    upgradeBtn.style.top = `${rect.top + btnY * scaleY}px`;
+                    upgradeBtn.style.transform = `translate(-50%, 0) scale(${scaleY * 1.4})`;
+                }
+            }
+        }
+
+        // --- ステージクリア演出描画 ---
+        if (this.isClearing) {
+            const centerX = CONFIG.logicalWidth / 2;
+            const centerY = CONFIG.logicalHeight / 2;
+
+            this.ctx.save();
+            // 背景を暗く
+            this.ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+            this.ctx.fillRect(0, 0, CONFIG.logicalWidth, CONFIG.logicalHeight);
+
+            this.ctx.textAlign = 'center';
+            this.ctx.textBaseline = 'middle';
+            
+            const pulse = Math.sin(this.clearTimer * 0.1) * 5;
+            this.ctx.font = `bold ${70 + pulse}px "Courier New", monospace`;
+            this.ctx.fillStyle = '#0ff';
+            this.ctx.shadowBlur = 15;
+            this.ctx.shadowColor = '#0ff';
+            this.ctx.fillText("PHASE COMPLETE", centerX, centerY);
+            
+            this.ctx.font = '20px "Courier New", monospace';
+            this.ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+            this.ctx.shadowBlur = 0;
+            this.ctx.fillText("INITIALIZING NEXT DATA SECTOR...", centerX, centerY + 80);
+            this.ctx.restore();
+        }
     }
 
     formatTime(s) {
-        const min = Math.floor(s / 60);
+        const m = Math.floor(s / 60);
         const sec = s % 60;
-        return `${min.toString().padStart(2, '0')}:${sec.toString().padStart(2, '0')}`;
+        return `${m.toString().padStart(2,'0')}:${sec.toString().padStart(2,'0')}`;
     }
 
     createExplosion(x, y, color) {
-        for (let i = 0; i < CONFIG.particleCount; i++) {
-            this.effects.push(new ExplosionParticle(x, y, color));
+        for(let i=0; i<CONFIG.particleCount; i++){
+            const angle = Math.random() * Math.PI * 2;
+            const speed = Math.random() * 3 + 1;
+            this.effects.push(new Particle(x, y, Math.cos(angle)*speed, Math.sin(angle)*speed, color));
         }
     }
 }
 
 class Block {
     constructor(x, y, hp) {
-        this.x = x; this.y = y;
-        this.w = CONFIG.blockWidth; this.h = CONFIG.blockHeight;
-        this.hp = hp; this.isDead = false;
-        this.color = '';
-        this.hitEffect = 0;
+        this.x = x; this.y = y; this.w = CONFIG.blockWidth; this.h = CONFIG.blockHeight;
+        this.hp = hp; this.isDead = false; this.color = ''; this.hitEffect = 0;
     }
-
     takeDamage(damage) {
-        this.hp -= damage;
-        this.hitEffect = 1.0;
-        
-        if (this.hp <= 0) {
-            this.isDead = true;
-            audio.play('destroy', 0.4); 
-        } else {
-            audio.play('hit', 0.15); 
-        }
+        this.hp -= damage; this.hitEffect = 1.0;
+        if (this.hp <= 0) { this.isDead = true; audio.play('destroy', 0.4); }
+        else { audio.play('hit', 0.15); }
     }
-
     draw(ctx) {
         const hue = (200 + this.hp) % 360;
         this.color = `hsl(${hue}, 80%, 40%)`;
-        
         if (this.hitEffect > 0) {
-            ctx.save();
-            ctx.shadowBlur = 15 * this.hitEffect;
-            ctx.shadowColor = `hsl(${hue}, 100%, 70%)`;
-            ctx.strokeStyle = `rgba(255, 255, 255, ${this.hitEffect})`;
-            ctx.lineWidth = 2;
-            ctx.strokeRect(this.x - 2, this.y - 2, this.w + 4, this.h + 4);
-            ctx.restore();
-            this.hitEffect *= 0.9;
-            if (this.hitEffect < 0.01) this.hitEffect = 0;
+            ctx.save(); ctx.shadowBlur = 15 * this.hitEffect; ctx.shadowColor = `hsl(${hue}, 100%, 70%)`;
+            ctx.strokeStyle = `rgba(255, 255, 255, ${this.hitEffect})`; ctx.lineWidth = 2;
+            ctx.strokeRect(this.x - 2, this.y - 2, this.w + 4, this.h + 4); ctx.restore();
+            this.hitEffect *= 0.9; if (this.hitEffect < 0.01) this.hitEffect = 0;
         }
-
-        ctx.fillStyle = this.color;
-        ctx.strokeStyle = `hsl(${hue}, 100%, 70%)`;
-        ctx.fillRect(this.x, this.y, this.w, this.h);
-        ctx.strokeRect(this.x, this.y, this.w, this.h);
-        
-        ctx.fillStyle = '#fff';
-        ctx.font = '12px monospace';
-        ctx.textAlign = 'center';
+        ctx.fillStyle = this.color; ctx.strokeStyle = `hsl(${hue}, 100%, 70%)`;
+        ctx.fillRect(this.x, this.y, this.w, this.h); ctx.strokeRect(this.x, this.y, this.w, this.h);
+        ctx.fillStyle = '#fff'; ctx.font = '12px monospace'; ctx.textAlign = 'center';
         ctx.fillText(this.hp.toLocaleString(), this.x + this.w / 2, this.y + this.h / 2 + 4);
     }
 }
@@ -509,10 +645,12 @@ class LifeForm {
     constructor(x, y) {
         this.x = x; this.y = y;
         const angle = Math.random() * Math.PI * 2;
-        this.speed = CONFIG.lifeBaseSpeed;
-        this.vx = Math.cos(angle) * this.speed;
-        this.vy = Math.sin(angle) * this.speed;
-        this.level = 1; this.attack = 1; this.exp = 0;
+        // 速度はGlobalStatsで決定するため、ここではベクトル計算用の一時的な値
+        this.vx = Math.cos(angle);
+        this.vy = Math.sin(angle);
+        
+        this.level = 1; 
+        this.exp = 0;
         this.nextLevelExp = CONFIG.baseExpToLevel;
         this.particles = []; this.pulse = 0;
         this.currentTarget = null;
@@ -526,55 +664,93 @@ class LifeForm {
         return { dx, dy, distSq: dx * dx + dy * dy };
     }
 
-    update(blocks, screenW, screenH) {
+    update(blocks, screenW, screenH, stats) {
         this.pulse += 0.08;
         let damageDone = 0;
+
+        const currentSpeed = stats.speed.val;
+        const currentTurn = stats.agility.val;
+        const currentAttack = stats.attack.val;
+
+        // 残像の生成
         for (let i = 0; i < CONFIG.lifeTrailDensity; i++) {
             this.particles.push({
-                x: this.x, 
-                y: this.y, 
-                life: CONFIG.lifeTrailLife,
-                size: (CONFIG.lifeBaseSize + this.level) * (1 - i/CONFIG.lifeTrailDensity)
+                x: this.x, y: this.y, life: CONFIG.lifeTrailLife,
+                size: (CONFIG.lifeBaseSize + this.level) * (1 - i / CONFIG.lifeTrailDensity)
             });
         }
-        for (let i = this.particles.length-1; i>=0; i--) {
+        for (let i = this.particles.length - 1; i >= 0; i--) {
             this.particles[i].life--;
             if (this.particles[i].life <= 0) this.particles.splice(i, 1);
         }
+
+        // ターゲットの選定
         if (!this.currentTarget || this.currentTarget.isDead) {
             if (blocks.length > 0) {
                 let minDistSq = Infinity;
                 let found = null;
                 blocks.forEach(b => {
-                    const vector = this.getToroidalVector(b.x + b.w/2, b.y + b.h/2, screenW, screenH);
-                    if (vector.distSq < minDistSq) { minDistSq = vector.distSq; found = b; }
+                    const vector = this.getToroidalVector(b.x + b.w / 2, b.y + b.h / 2, screenW, screenH);
+                    if (vector.distSq < minDistSq) { 
+                        minDistSq = vector.distSq; 
+                        found = b; 
+                    }
                 });
                 this.currentTarget = found;
             }
         }
+
+        // 旋回ロジック
+        let currentAngle = Math.atan2(this.vy, this.vx);
         if (this.currentTarget) {
-            const vector = this.getToroidalVector(this.currentTarget.x + this.currentTarget.w/2, this.currentTarget.y + this.currentTarget.h/2, screenW, screenH);
+            const vector = this.getToroidalVector(
+                this.currentTarget.x + this.currentTarget.w / 2, 
+                this.currentTarget.y + this.currentTarget.h / 2, 
+                screenW, screenH
+            );
             const targetAngle = Math.atan2(vector.dy, vector.dx);
-            const currentAngle = Math.atan2(this.vy, this.vx);
             let delta = targetAngle - currentAngle;
             while (delta > Math.PI) delta -= Math.PI * 2;
             while (delta < -Math.PI) delta += Math.PI * 2;
-            const turn = Math.max(-CONFIG.lifeTurnRate, Math.min(CONFIG.lifeTurnRate, delta));
-            this.vx = Math.cos(currentAngle + turn) * this.speed;
-            this.vy = Math.sin(currentAngle + turn) * this.speed;
+            
+            const turn = Math.max(-currentTurn, Math.min(currentTurn, delta));
+            currentAngle += turn;
         }
-        this.x += this.vx; this.y += this.vy;
+
+        this.vx = Math.cos(currentAngle) * currentSpeed;
+        this.vy = Math.sin(currentAngle) * currentSpeed;
+
+        this.x += this.vx; 
+        this.y += this.vy;
+
         if (this.x < 0) this.x += screenW; else if (this.x >= screenW) this.x -= screenW;
         if (this.y < 0) this.y += screenH; else if (this.y >= screenH) this.y -= screenH;
+
+        // 衝突判定（位置補正付き）
         const r = CONFIG.lifeBaseSize + this.level;
         for (const b of blocks) {
-            if (this.x > b.x-r && this.x < b.x+b.w+r && this.y > b.y-r && this.y < b.y+b.h+r) {
-                b.takeDamage(this.attack);
-                damageDone = this.attack;
+            if (this.x > b.x - r && this.x < b.x + b.w + r && this.y > b.y - r && this.y < b.y + b.h + r) {
+                b.takeDamage(currentAttack);
+                damageDone = currentAttack;
                 this.exp++;
                 if (this.exp >= this.nextLevelExp) this.levelUp();
-                if (Math.abs(this.x - (b.x+b.w/2))/b.w > Math.abs(this.y - (b.y+b.h/2))/b.h) this.vx *= -1;
-                else this.vy *= -1;
+                
+                // 衝突面に応じた反転と「押し出し」
+                const overlapX = Math.abs(this.x - (b.x + b.w / 2)) / b.w;
+                const overlapY = Math.abs(this.y - (b.y + b.h / 2)) / b.h;
+
+                if (overlapX > overlapY) {
+                    // 横方向の衝突
+                    this.vx *= -1;
+                    // ブロックの外側へ座標を強制移動（張り付き防止）
+                    this.x = (this.x < b.x + b.w / 2) ? b.x - r : b.x + b.w + r;
+                } else {
+                    // 縦方向の衝突
+                    this.vy *= -1;
+                    // ブロックの外側へ座標を強制移動（張り付き防止）
+                    this.y = (this.y < b.y + b.h / 2) ? b.y - r : b.y + b.h + r;
+                }
+                
                 this.currentTarget = null; 
                 break;
             }
@@ -583,67 +759,65 @@ class LifeForm {
     }
 
     levelUp() {
-        this.level++; this.attack = this.level; this.exp = 0;
+        this.level++; 
+        this.exp = 0;
         this.nextLevelExp = Math.floor(this.nextLevelExp * 1.5);
-        if (this.speed < CONFIG.lifeMaxSpeed) this.speed += 0.3;
+        
+        audio.play('evolution', 0.5);
     }
 
-draw(ctx) {
+    draw(ctx) {
         const hue = (this.level * 45) % 360;
         const baseColor = `hsl(${hue}, 80%, 60%)`;
         const glowColor = `hsl(${hue}, 80%, 50%)`;
         const size = CONFIG.lifeBaseSize + this.level + Math.sin(this.pulse) * 1.5;
 
         ctx.save();
-        
         ctx.globalCompositeOperation = 'source-over'; 
-
-        // 1. 残像
         this.particles.forEach(p => {
             const alpha = (p.life / CONFIG.lifeTrailLife) * 0.15;
-            ctx.fillStyle = glowColor;
-            ctx.globalAlpha = alpha;
-            ctx.beginPath();
-            ctx.arc(p.x, p.y, p.size * 1.2, 0, Math.PI * 2);
-            ctx.fill();
+            ctx.fillStyle = glowColor; ctx.globalAlpha = alpha;
+            ctx.beginPath(); ctx.arc(p.x, p.y, p.size * 1.2, 0, Math.PI * 2); ctx.fill();
         });
-
-        // 2. 本体
         ctx.translate(this.x, this.y);
         ctx.rotate(Math.atan2(this.vy, this.vx));
-
-        // 輪郭のぼかし
         for (let i = 0; i < 2; i++) {
             const s = size * (1.1 + i * 0.4);
             const a = 0.2 - i * 0.1;
-            ctx.fillStyle = glowColor;
-            ctx.globalAlpha = a;
-            
+            ctx.fillStyle = glowColor; ctx.globalAlpha = a;
             ctx.beginPath();
             ctx.arc(0, 0, s, Math.PI * 0.5, Math.PI * 1.5);
             ctx.bezierCurveTo(-s * 0.5, -s, -s * 2, -s * 0.1, -s * 3, 0);
             ctx.bezierCurveTo(-s * 2, s * 0.1, -s * 0.5, s, 0, s);
             ctx.fill();
         }
-
-        // 最深部
-        ctx.globalAlpha = 0.8;
-        ctx.fillStyle = `hsl(${hue}, 50%, 90%)`; 
-        ctx.beginPath();
-        ctx.arc(size * 0.3, 0, size * 0.4, 0, Math.PI * 2);
-        ctx.fill();
-
+        ctx.globalAlpha = 0.8; ctx.fillStyle = `hsl(${hue}, 50%, 90%)`; 
+        ctx.beginPath(); ctx.arc(size * 0.3, 0, size * 0.4, 0, Math.PI * 2); ctx.fill();
         ctx.restore();
-
-        // 経験値バー
         const gW = 24, gH = 2;
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.05)';
-        ctx.fillRect(this.x - gW/2, this.y - size - 18, gW, gH);
-        ctx.fillStyle = baseColor;
-        ctx.globalAlpha = 0.6;
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.05)'; ctx.fillRect(this.x - gW/2, this.y - size - 18, gW, gH);
+        ctx.fillStyle = baseColor; ctx.globalAlpha = 0.6;
         ctx.fillRect(this.x - gW/2, this.y - size - 18, gW * (this.exp / this.nextLevelExp), gH);
         ctx.globalAlpha = 1.0;
     }
 }
+
+class Particle {
+    constructor(x, y, vx, vy, color) {
+        this.x = x; this.y = y; this.vx = vx; this.vy = vy;
+        this.color = color; this.life = CONFIG.particleLife; this.maxLife = CONFIG.particleLife;
+    }
+    update() {
+        this.x += this.vx; this.y += this.vy; this.life--;
+        this.vx *= 0.95; this.vy *= 0.95;
+    }
+    draw(ctx) {
+        ctx.fillStyle = this.color;
+        ctx.globalAlpha = this.life / this.maxLife;
+        ctx.beginPath(); ctx.arc(this.x, this.y, 2, 0, Math.PI*2); ctx.fill();
+        ctx.globalAlpha = 1;
+    }
+}
+
 
 window.onload = () => new Game();
