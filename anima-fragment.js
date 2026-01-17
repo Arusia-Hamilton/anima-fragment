@@ -4,18 +4,35 @@
  * ==========================================
  */
 const CONFIG = {
-    bgColor: '#050508',
-    logicalWidth: 1920, 
-    logicalHeight: 1080,
-    blockWidth: 60, blockHeight: 30, blockPadding: 8, blockRows: 22,
-    lifeCount: 5, // 6から5に変更
-    lifeBaseSize: 8,
-    lifeTrailDensity: 4, lifeTrailLife: 12,
-    particleCount: 20, particleLife: 40,
-    baseExpToLevel: 8, hpMultiplier: 10,
+    // --- 画面設定 ---
+    bgColor: '#050508',        // 背景色
+    logicalWidth: 1920,         // ゲーム内の論理的な横幅（描画の基準）
+    logicalHeight: 1080,        // ゲーム内の論理的な縦幅
+
+    // --- ブロックの設定 ---
+    blockWidth: 60,             // ブロック1つの横幅
+    blockHeight: 30,            // ブロック1つの縦幅
+    blockPadding: 8,            // ブロック同士の隙間
+    blockRows: 22,              // 配置するブロックの行数（増やすと1ステージが長くなります）
+
+    // --- 生命体（LifeForm）の基本設定 ---
+    lifeCount: 5,               // ゲーム開始時の生命体の数
+    lifeBaseSize: 8,            // 生命体の基本半径（Lv.1の時の大きさ）
     
-    lifeBaseSpeed: 3,
-    lifeMaxSpeed: 12,
+    // --- 演出（残像・エフェクト） ---
+    lifeTrailDensity: 4,        // 残像の密度（増やすと軌跡が濃くなりますが重くなります）
+    lifeTrailLife: 12,          // 残像が消えるまでの時間（フレーム数）
+    particleCount: 20,          // ブロック破壊時の火花の数
+    particleLife: 40,           // 火花が消えるまでの時間
+
+    // --- 成長・バランス調整 ---
+    baseExpToLevel: 8,          // Lv.1からLv.2に上がるために必要な経験値（叩く回数）
+    expMultiplier: 1.5,         // レベルアップごとの必要経験値の増加倍率
+    hpMultiplier: 10,           // ステージ進行によるブロックHPの増加倍率（高いほど敵が硬くなります）
+    
+    // --- 移動速度設定 ---
+    lifeBaseSpeed: 3,           // 生命体の初期移動速度
+    lifeMaxSpeed: 12,           // アップグレードによる移動速度の限界値
 };
 
 /**
@@ -99,8 +116,7 @@ class Game {
         this.maxLevelRecord = 1; 
         this.hasNewPoints = false;
 
-        // ★ここでロードを実行！
-        // これにより、デフォルト値の上からセーブデータが上書きされます
+        // ロードゲーム
         this.loadGame();
 
         this.resize();
@@ -427,7 +443,7 @@ class Game {
                     lf.currentTarget = null;
                 });
 
-                // ★追加: 演出終了後、ポイントがあればボタンを再表示させる
+                // 演出終了後、ポイントがあればボタンを再表示させる
                 if (this.upgradePoints > 0 || this.maxLevelRecord > 0) {
                     const upgradeBtn = document.getElementById('upgradeBtn');
                     if (upgradeBtn) upgradeBtn.style.display = 'inline-block';
@@ -501,7 +517,7 @@ class Game {
         const progress = 1 - (currentTotalHp / this.stats.initialTotalHp || 0);
         const dps = Math.floor(this.getAverageDPS());
 
-        // ★修正点：今回のセッション時間 ＋ 過去の累計時間 を合計して秒に変換
+        // 今回のセッション時間 ＋ 過去の累計時間 を合計して秒に変換
         const totalMs = (Date.now() - this.stats.startTime) + (this.stats.accumulatedTime || 0);
         const uptimeSeconds = Math.floor(totalMs / 1000);
 
@@ -762,7 +778,7 @@ class LifeForm {
         this.level = level;
         this.exp = 0;
 
-        this.nextLevelExp = Math.floor(CONFIG.baseExpToLevel * Math.pow(1.5, this.level - 1));
+        this.nextLevelExp = Math.floor(CONFIG.baseExpToLevel * Math.pow(CONFIG.expMultiplier, this.level - 1));
     }
 
     getToroidalVector(targetX, targetY, screenW, screenH) {
