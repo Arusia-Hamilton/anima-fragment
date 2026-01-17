@@ -6,6 +6,8 @@
 const CONFIG = {
     // --- 背景・画面設定 ---
     bgColor: '#050508',      // 背景色（非常に濃い紺色）
+    logicalWidth: 1920,  // ゲーム内部の横幅（固定）
+    logicalHeight: 1080, // ゲーム内部の縦幅（固定）
     
     // --- ブロックの設定 ---
     blockWidth: 60,          // ブロック1つの横幅（ピクセル）
@@ -37,8 +39,8 @@ const CONFIG = {
  */
 class AudioManager {
     constructor() {
-        this.hitSoundPath = './sounds/c.mp3';
-        this.destroySoundPath = './sounds/d.mp3';
+        this.hitSoundPath = './sounds/impact_crystal.mp3';
+        this.destroySoundPath = './sounds/fragment_shatter.mp3';
         
         // 音声を使い回すための「プール」を作成
         this.hitPool = this.createPool(this.hitSoundPath, 15);     // ヒット音用：最大15同時再生
@@ -91,9 +93,11 @@ const audio = new AudioManager();
 
 class Game {
     constructor() {
+        // 1. 基本的なCanvasとコンテキストの初期化
         this.canvas = document.getElementById('gameCanvas');
         this.ctx = this.canvas.getContext('2d');
         
+        // 2. ゲーム状態の初期化
         this.isStarted = false;
         this.stage = 1;
         this.blocks = [];
@@ -101,6 +105,12 @@ class Game {
         this.effects = [];
         this.auraRotation = 0;
 
+        // 3. 仮想キャンバス・スケーリング用のプロパティ
+        this.scale = 1;
+        this.offsetX = 0;
+        this.offsetY = 0;
+
+        // 4. 統計データの初期化
         this.stats = {
             destroyedBlocks: 0,
             totalHits: 0,
@@ -110,23 +120,72 @@ class Game {
             initialTotalHp: 0  
         };
         
-        this.width = this.canvas.width = window.innerWidth;
-        this.height = this.canvas.height = window.innerHeight;
+        // 5. 画面サイズの初期計算と警告チェック
+        this.resize(); 
+        this.checkScreenSize();
 
-        window.addEventListener('resize', () => this.resize());
+        // 6. イベントリスナーの設定
+        window.addEventListener('resize', () => {
+            this.resize();
+            this.checkScreenSize(); // リサイズするたびに推奨サイズかチェック
+        });
 
+        // 7. スタート画面（オーバーレイ）の制御
         const startScreen = document.getElementById('startScreen');
         startScreen.addEventListener('click', () => {
             if (!this.isStarted) {
-                this.start();
+                this.isStarted = true;
+                this.stats.startTime = Date.now();
+                
+                // ブラウザの音声再生制限を解除するためのダミー再生
+                const silentAudio = new Audio();
+                silentAudio.play().catch(() => {}); 
+                
+                // 画面を隠してループを開始
                 startScreen.style.display = 'none';
+                this.loop();
             }
         });
 
+        // 8. ステージの構築と生命体の生成
         this.initStage();
         this.spawnLifeForms();
         
+        // 9. 開始前の静止画面を一度だけ描画
         this.drawInitialFrame();
+    }
+
+    checkScreenSize() {
+        const warningEl = document.getElementById('sizeWarning');
+        if (!warningEl) return;
+
+        const sw = window.innerWidth;
+        const sh = window.innerHeight;
+        
+        const isLowRes = sw < 1000 || sh < 600;
+
+        if (isLowRes) {
+            // 警告：赤い装飾枠で囲み、中の文字は固定（点滅させない）
+            warningEl.style.display = 'block';
+            warningEl.innerHTML = `
+                <div class="warning-box">
+                    <span style="color: #ff4444; font-weight: bold;">[ SYSTEM WARNING ]</span><br>
+                    <span style="color: #fff; opacity: 0.9; font-size: 11px;">
+                        LOW RESOLUTION: ${sw}x${sh}<br>
+                        RECOMMENDED: 1280x720 OR HIGHER
+                    </span>
+                </div>
+            `;
+        } else {
+            // 正常：枠なしで静かに表示
+            warningEl.style.display = 'block';
+            warningEl.innerHTML = `
+                <div style="color: rgba(0, 200, 255, 0.4); margin-top: 15px;">
+                    RESOLUTION: ${sw}x${sh} [ OK ]<br>
+                    SYSTEM CALIBRATION COMPLETE
+                </div>
+            `;
+        }
     }
 
     start() {
@@ -142,47 +201,47 @@ class Game {
     }
 
     drawInitialFrame() {
+        this.ctx.save();
+        this.ctx.translate(this.offsetX, this.offsetY);
+        this.ctx.scale(this.scale, this.scale);
         this.ctx.fillStyle = CONFIG.bgColor;
-        this.ctx.fillRect(0, 0, this.width, this.height);
+        this.ctx.fillRect(0, 0, CONFIG.logicalWidth, CONFIG.logicalHeight);
         this.drawAura();
         this.blocks.forEach(b => b.draw(this.ctx));
-        // 生命体は描画のみ（動かさない）
-        this.lifeForms.forEach(lf => {
-            const hue = (lf.level * 45) % 360;
-            this.ctx.fillStyle = `hsl(${hue}, 80%, 50%, 0.3)`;
-            this.ctx.beginPath();
-            this.ctx.arc(lf.x, lf.y, CONFIG.lifeBaseSize + lf.level, 0, Math.PI * 2);
-            this.ctx.fill();
-        });
+        this.ctx.restore();
     }
 
     resize() {
-        this.width = this.canvas.width = window.innerWidth;
-        this.height = this.canvas.height = window.innerHeight;
+        const screenW = window.innerWidth;
+        const screenH = window.innerHeight;
+        const scaleX = screenW / CONFIG.logicalWidth;
+        const scaleY = screenH / CONFIG.logicalHeight;
         
-        this.initStage();
+        // アスペクト比を維持してフィットさせる
+        this.scale = Math.min(scaleX, scaleY);
+        this.offsetX = (screenW - CONFIG.logicalWidth * this.scale) / 2;
+        this.offsetY = (screenH - CONFIG.logicalHeight * this.scale) / 2;
 
-        if (this.lifeForms) {
-            this.lifeForms.forEach(lf => {
-                lf.currentTarget = null;
-            });
-        }
+        this.canvas.width = screenW;
+        this.canvas.height = screenH;
     }
 
     initStage() {
         this.blocks = [];
-        const cols = Math.floor(this.width / (CONFIG.blockWidth + CONFIG.blockPadding));
-        const offsetX = (this.width - (cols * (CONFIG.blockWidth + CONFIG.blockPadding))) / 2;
+        const cols = Math.floor(CONFIG.logicalWidth / (CONFIG.blockWidth + CONFIG.blockPadding)) - 2;
+        const offsetX = (CONFIG.logicalWidth - (cols * (CONFIG.blockWidth + CONFIG.blockPadding))) / 2;
         let totalHp = 0;
+        
         const seedA = Math.random() * 2 + 0.2;
         const seedB = Math.random() * 2 + 0.2;
         const threshold = Math.random() * 0.4 - 0.2;
-        const safeZoneHeight = 350; 
-        const centerY = this.height / 2;
+        const safeZoneHeight = 400; 
+        const centerY = CONFIG.logicalHeight / 2;
 
         for (let r = 0; r < CONFIG.blockRows; r++) {
-            const y = 80 + r * (CONFIG.blockHeight + CONFIG.blockPadding);
-            if (y > this.height - 50) continue;
+            const y = 120 + r * (CONFIG.blockHeight + CONFIG.blockPadding);
+            if (y > CONFIG.logicalHeight - 100) continue;
+            // 中央のUIエリアには配置しない
             if (y > centerY - (safeZoneHeight / 2) && y < centerY + (safeZoneHeight / 2)) continue;
 
             for (let c = 0; c < cols; c++) {
@@ -202,7 +261,7 @@ class Game {
     spawnLifeForms() {
         this.lifeForms = [];
         for (let i = 0; i < CONFIG.lifeCount; i++) {
-            this.lifeForms.push(new LifeForm(this.width / 2, this.height / 2));
+            this.lifeForms.push(new LifeForm(CONFIG.logicalWidth / 2, CONFIG.logicalHeight / 2));
         }
     }
 
@@ -222,12 +281,20 @@ class Game {
     loop() {
         if (!this.isStarted) return;
 
+        // 1. 全体クリア（物理座標）
+        this.ctx.setTransform(1, 0, 0, 1, 0, 0);
         this.ctx.fillStyle = CONFIG.bgColor;
-        this.ctx.fillRect(0, 0, this.width, this.height);
+        this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+        // 2. 仮想空間の描画開始
+        this.ctx.save();
+        this.ctx.translate(this.offsetX, this.offsetY);
+        this.ctx.scale(this.scale, this.scale);
 
         this.drawAura();
         this.drawUI();
 
+        // ブロック更新
         for (let i = this.blocks.length - 1; i >= 0; i--) {
             const block = this.blocks[i];
             if (block.isDead) {
@@ -239,27 +306,33 @@ class Game {
             }
         }
 
+        // 生命体更新（仮想解像度を渡す）
         this.lifeForms.forEach(lf => {
-            const damageDealt = lf.update(this.blocks, this.width, this.height);
+            const damageDealt = lf.update(this.blocks, CONFIG.logicalWidth, CONFIG.logicalHeight);
             if (damageDealt > 0) this.updateDPS(damageDealt);
             lf.draw(this.ctx);
         });
 
+        // エフェクト更新
         for (let i = this.effects.length - 1; i >= 0; i--) {
             this.effects[i].update();
             this.effects[i].draw(this.ctx);
             if (this.effects[i].life <= 0) this.effects.splice(i, 1);
         }
 
+        // 次ステージ判定
         if (this.blocks.length === 0) {
             this.stage++;
             this.initStage();
             this.lifeForms.forEach(lf => {
-                lf.x = this.width / 2;
-                lf.y = this.height / 2;
+                lf.x = CONFIG.logicalWidth / 2;
+                lf.y = CONFIG.logicalHeight / 2;
                 lf.currentTarget = null;
             });
         }
+
+        this.ctx.restore();
+        // 仮想空間の描画終了
 
         requestAnimationFrame(() => this.loop());
     }
@@ -292,76 +365,63 @@ class Game {
     }
 
     drawUI() {
-        const centerX = this.width / 2;
-        const centerY = this.height / 2;
+        const centerX = CONFIG.logicalWidth / 2;
+        const centerY = CONFIG.logicalHeight / 2;
         const currentTotalHp = this.blocks.reduce((sum, b) => sum + b.hp, 0);
         const progress = 1 - (currentTotalHp / this.stats.initialTotalHp || 0);
-        const dps = Math.floor(this.getAverageDPS()); // 小数点を切り捨て
+        const dps = Math.floor(this.getAverageDPS());
         const uptime = Math.floor((Date.now() - this.stats.startTime) / 1000);
         const maxUnitLevel = Math.max(...this.lifeForms.map(lf => lf.level));
         const totalAttack = this.lifeForms.reduce((s, l) => s + l.attack, 0);
 
-        // 1. 進捗バー
-        const barW = 400, barH = 2;
-        const barY = 30;
+        // プログレスバー
+        const barW = 400, barH = 2, barY = 50;
         this.ctx.fillStyle = '#111';
         this.ctx.fillRect(centerX - barW/2, barY, barW, barH);
-        this.ctx.shadowBlur = 10;
-        this.ctx.shadowColor = 'rgba(0, 255, 0, 0.5)';
         this.ctx.fillStyle = '#0f0';
         this.ctx.fillRect(centerX - barW/2, barY, barW * progress, barH);
-        this.ctx.shadowBlur = 0;
 
-        // 2. プロジェクト名
+        // タイトルロゴ
         const titleY = barY + 60;
         this.ctx.textAlign = 'center';
-        this.ctx.shadowBlur = 15;
-        this.ctx.shadowColor = 'rgba(0, 200, 255, 0.3)';
         this.ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
         this.ctx.font = 'bold 32px "Courier New", monospace';
         this.ctx.letterSpacing = "8px";
         this.ctx.fillText("ANIMA FRAGMENT", centerX, titleY);
         this.ctx.letterSpacing = "0px";
-        this.ctx.shadowBlur = 0;
 
-        // 3. PHASE表示
+        // PHASE表示
         const phaseY = centerY - 80; 
-        this.ctx.textAlign = 'center';
         this.ctx.fillStyle = 'rgba(0, 200, 255, 0.1)';
         this.ctx.font = 'bold 85px "Courier New", monospace';
         this.ctx.fillText(`PHASE_${this.stage.toLocaleString()}`, centerX, phaseY);
 
-        // 4. スタッツ情報（名称の変更とカンマ区切り適用）
-        this.ctx.font = '16px "Courier New", monospace'; // 項目名が長くなったので少しフォントを調整
+        // スタッツ（カンマ区切りと名称変更を反映）
+        this.ctx.font = '16px "Courier New", monospace';
         const statsLineY = phaseY + 40;
         const spacing = 28;
-        const columnGap = 12;
-
         const data = [
             [this.lifeForms.length.toLocaleString(), "UNITS_ACTIVE"],
-            [this.stats.destroyedBlocks.toLocaleString(), "BLOCKS_DESTROYED"], // CLEARED -> DESTROYED
-            [this.stats.totalHits.toLocaleString(), "CONTACT_HITS"],          // SYSTEM_HITS -> CONTACT_HITS
+            [this.stats.destroyedBlocks.toLocaleString(), "BLOCKS_DESTROYED"],
+            [this.stats.totalHits.toLocaleString(), "CONTACT_HITS"],
             [this.stats.totalDamage.toLocaleString(), "TOTAL_DAMAGE"],
-            [dps.toLocaleString() + "/s", "DAMAGE_PER_SEC"],                  // DMG_VELOCITY -> DAMAGE_PER_SEC
-            [totalAttack.toLocaleString(), "TOTAL_ATTACK_PWR"],               // ATK_POTENTIAL -> TOTAL_ATTACK_PWR
-            ["LV." + maxUnitLevel.toLocaleString(), "MAX_UNIT_LEVEL"],        // MAX_LEVEL -> MAX_UNIT_LEVEL
+            [dps.toLocaleString() + "/s", "DAMAGE_PER_SEC"],
+            [totalAttack.toLocaleString(), "TOTAL_ATTACK_PWR"],
+            ["LV." + maxUnitLevel.toLocaleString(), "MAX_UNIT_LEVEL"],
             [this.formatTime(uptime), "SYSTEM_UPTIME"]
         ];
 
         data.forEach((item, i) => {
             const y = statsLineY + (i * spacing);
-            this.ctx.shadowBlur = 4;
-            this.ctx.shadowColor = 'rgba(255, 255, 255, 0.2)';
             this.ctx.textAlign = 'right';
             this.ctx.fillStyle = '#fff';
-            this.ctx.fillText(item[0], centerX - columnGap, y);
+            this.ctx.fillText(item[0], centerX - 12, y);
             this.ctx.textAlign = 'center';
             this.ctx.fillStyle = 'rgba(0, 200, 255, 0.5)';
             this.ctx.fillText(":", centerX, y);
             this.ctx.textAlign = 'left';
             this.ctx.fillStyle = 'rgba(0, 200, 255, 0.7)';
-            this.ctx.fillText(item[1], centerX + columnGap, y);
-            this.ctx.shadowBlur = 0;
+            this.ctx.fillText(item[1], centerX + 12, y);
         });
     }
 
@@ -393,7 +453,6 @@ class Block {
         
         if (this.hp <= 0) {
             this.isDead = true;
-            // 引数をパスではなくキーワードに変更
             audio.play('destroy', 0.4); 
         } else {
             audio.play('hit', 0.15); 
