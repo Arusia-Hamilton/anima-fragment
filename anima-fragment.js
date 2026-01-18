@@ -993,7 +993,7 @@ class LifeForm {
         const hue = (this.level * 45) % 360;
         const baseColor = `hsl(${hue}, 80%, 60%)`;
         const glowColor = `hsl(${hue}, 80%, 50%)`;
-        const size = CONFIG.lifeBaseSize + this.level + Math.sin(this.pulse) * 1.5;
+        const size = CONFIG.lifeBaseSize + Math.sqrt(this.level) * 3 + Math.sin(this.pulse) * 1.5;
 
         ctx.save();
         ctx.globalCompositeOperation = 'source-over'; 
