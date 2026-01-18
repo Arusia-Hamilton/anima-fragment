@@ -278,7 +278,7 @@ class Game {
                 prestigeBtn.disabled = true;
                 prestigeBtn.style.opacity = '0.3';
                 prestigeBtn.style.cursor = 'not-allowed';
-                prestigeBtn.innerText = '[ PHASE 30 REQUIRED ]';
+                prestigeBtn.innerText = '[ PRESTIGE: PH30 REQ ]';
             } else {
                 prestigeBtn.disabled = false;
                 prestigeBtn.style.opacity = '1';
@@ -754,7 +754,7 @@ class Game {
 
     prestigeGame() {
         if (this.stage < 30) {
-            alert(`プレステージを実行するには PHASE 30 への到達が必要です。\n(現在のPHASE: ${this.stage})`);
+            alert(`[アクセス拒否]\nSYSTEM_EVOLUTIONを実行するには PHASE 30 への到達が必要です。\n(現在のPHASE: ${this.stage})`);
             return;
         }
 
@@ -763,32 +763,30 @@ class Game {
         const totalPointsAfter = carryOverPoints + rewardPoints;
         
         const firstCheck = confirm(
-            `【システム再起動：プレステージ実行】\n\n` +
-            `現在の到達PHASE: ${this.stage}\n` +
+            `【システム進化：PRESTIGE実行】\n\n` +
+            `到達PHASE: ${this.stage}\n` +
             `--------------------------\n` +
-            `・今回のクリア報酬 : + ${rewardPoints} pt\n` +
-            `・未消費の所持分   : + ${carryOverPoints} pt\n` +
-            `・再開時の合計所持 :   ${totalPointsAfter} pt\n` +
+            `・進化報酬    : + ${rewardPoints} pt\n` +
+            `・未消費分    : + ${carryOverPoints} pt\n` +
+            `・次世代所持  :   ${totalPointsAfter} pt\n` +
             `--------------------------\n` +
-            `進行状況をリセットし、ポイントを獲得してシステムを再起動しますか？`
+            `現在の個体をアーカイブし、システムを進化させて再起動しますか？`
         );
 
         if (firstCheck) {
             const secondCheck = confirm(
                 "最終確認：本当によろしいですか？\n" +
-                "アップグレードと統計データ、システム稼働時間はリセットされます。\n" +
-                `合計 ${totalPointsAfter} pt を持って PHASE 1 から再起動します。`
+                "アップグレード記録とシステム時間は初期化されますが、\n" +
+                `合計 ${totalPointsAfter} pt を持って PHASE 1 から ASCEND（上昇）します。`
             );
 
             if (secondCheck) {
-                // 新しいセーブデータを作成（完全な再起動状態）
                 const prestigeSave = {
                     prestigeCount: (this.prestigeCount || 0) + 1,
                     stage: 1,
                     upgradePoints: totalPointsAfter,
                     maxLevelRecord: 1,
                     
-                    // 初期ステータスへリセット
                     globalStats: {
                         attack:  { lv: 1, val: 1, max: 20, step: 1, name: "ATTACK_POWER" },
                         speed:   { lv: 1, val: 2.8, max: 10, step: 0.6, name: "MVMT_SPEED" },
@@ -796,21 +794,18 @@ class Game {
                         maxLife: { lv: 1, val: 5, max: 10, step: 1, name: "MAX_FRAGMENTS" }
                     },
                     
-                    // 生命体もLv1の5体へリセット
                     lifeFormLevels: [1, 1, 1, 1, 1],
                     
-                    // 統計データと時間を完全に初期化
                     stats: {
                         destroyedBlocks: 0,
                         totalHits: 0,
                         totalDamage: 0,
                         startTime: Date.now(),
-                        accumulatedTime: 0
+                        accumulatedTime: 0 
                     },
                     timestamp: Date.now()
                 };
 
-                // セーブデータを上書きしてリロード
                 localStorage.setItem('anima_fragment_save', JSON.stringify(prestigeSave));
                 location.reload();
             }
