@@ -26,8 +26,8 @@ const CONFIG = {
     particleLife: 40,           // 火花が消えるまでの時間
 
     // --- 成長・バランス調整 ---
-    baseExpToLevel: 8,          // Lv.1からLv.2に上がるために必要な経験値（叩く回数）
-    expMultiplier: 1.5,         // レベルアップごとの必要経験値の増加倍率
+    baseExpToLevel: 10,          // Lv.1からLv.2に上がるために必要な経験値（叩く回数）
+    expMultiplier: 1.2,         // レベルアップごとの必要経験値の増加倍率
     hpMultiplier: 10,           // ステージ進行によるブロックHPの増加倍率（高いほど敵が硬くなります）
     
     // --- 移動速度設定 ---
@@ -44,24 +44,36 @@ class AudioManager {
         this.hitSoundPath = './sounds/impact_crystal.mp3';
         this.destroySoundPath = './sounds/fragment_shatter.mp3';
         this.evoSoundPath = './sounds/anima_evolution.mp3';
+        this.upgradeSoundPath = './sounds/upgrade.mp3';
 
         this.hitPool = this.createPool(this.hitSoundPath, 15);
         this.destroyPool = this.createPool(this.destroySoundPath, 5);
         this.evoPool = this.createPool(this.evoSoundPath, 3);
+        this.upgradePool = this.createPool(this.upgradeSoundPath, 3);
 
-        this.hitIndex = 0; this.destroyIndex = 0; this.evoIndex = 0;
-        this.lastPlayTime = 0; this.minInterval = 50; 
+        this.hitIndex = 0; 
+        this.destroyIndex = 0; 
+        this.evoIndex = 0;
+        this.upgradeIndex = 0;
+        
+        this.lastPlayTime = 0; 
+        this.minInterval = 50; 
     }
+
     createPool(path, size) {
         const pool = [];
         for (let i = 0; i < size; i++) {
-            const audio = new Audio(path); audio.load(); pool.push(audio);
+            const audio = new Audio(path); 
+            audio.load(); 
+            pool.push(audio);
         }
         return pool;
     }
+
     play(type, volume = 0.2) {
         const now = Date.now();
         let targetPool, targetIndex;
+
         if (type === 'hit') {
             if (now - this.lastPlayTime < this.minInterval) return;
             targetPool = this.hitPool; targetIndex = this.hitIndex;
@@ -73,10 +85,16 @@ class AudioManager {
         } else if (type === 'evolution') {
             targetPool = this.evoPool; targetIndex = this.evoIndex;
             this.evoIndex = (this.evoIndex + 1) % this.evoPool.length;
+        } else if (type === 'upgrade') {
+            targetPool = this.upgradePool; targetIndex = this.upgradeIndex;
+            this.upgradeIndex = (this.upgradeIndex + 1) % this.upgradePool.length;
         }
+
         if (targetPool) {
             const audio = targetPool[targetIndex];
-            audio.volume = volume; audio.currentTime = 0; audio.play().catch(()=>{});
+            audio.volume = volume; 
+            audio.currentTime = 0; 
+            audio.play().catch(()=>{});
         }
     }
 }
@@ -156,6 +174,7 @@ class Game {
         const modal = document.getElementById('upgradeModal');
         const close = document.getElementById('closeModal');
         const resetBtn = document.getElementById('resetBtn');
+        const prestigeBtn = document.getElementById('prestigeBtn');
 
         btn.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -180,6 +199,12 @@ class Game {
         if (resetBtn) {
             resetBtn.addEventListener('click', () => {
                 this.resetGame();
+            });
+        }
+
+        if (prestigeBtn) {
+            prestigeBtn.addEventListener('click', () => {
+                this.prestigeGame();
             });
         }
     }
@@ -246,6 +271,21 @@ class Game {
                 upgradeBtn.onclick = () => this.purchaseUpgrade(key);
             }
         });
+
+        const prestigeBtn = document.getElementById('prestigeBtn');
+        if (prestigeBtn) {
+            if (this.stage < 30) {
+                prestigeBtn.disabled = true;
+                prestigeBtn.style.opacity = '0.3';
+                prestigeBtn.style.cursor = 'not-allowed';
+                prestigeBtn.innerText = '[ PHASE 30 REQUIRED ]';
+            } else {
+                prestigeBtn.disabled = false;
+                prestigeBtn.style.opacity = '1';
+                prestigeBtn.style.cursor = 'pointer';
+                prestigeBtn.innerText = '[ PRESTIGE ]';
+            }
+        }
     }
 
     purchaseUpgrade(key) {
@@ -257,17 +297,15 @@ class Game {
                 s.lv++;
                 s.val += s.step;
 
-                // 生命体追加の特殊処理
                 if (key === 'maxLife') {
-                    // 画面中央に新しい生命体を生成して配列に追加
                     const newLife = new LifeForm(this.canvas.width / 2, this.canvas.height / 2);
                     this.lifeForms.push(newLife);
                 }
 
                 this.updateUpgradeList();
-                new Audio('./sounds/upgrade.mp3').play();
 
-                // セーブ
+                audio.play('upgrade', 0.5);
+
                 this.saveGame();
             }
         }
@@ -709,6 +747,71 @@ class Game {
             const secondCheck = confirm("本当によろしいですか？この操作は取り消せません。システムが初期状態に再起動されます。");
             if (secondCheck) {
                 localStorage.removeItem('anima_fragment_save');
+                location.reload();
+            }
+        }
+    }
+
+    prestigeGame() {
+        if (this.stage < 30) {
+            alert(`プレステージを実行するには PHASE 30 への到達が必要です。\n(現在のPHASE: ${this.stage})`);
+            return;
+        }
+
+        const rewardPoints = Math.max(0, this.stage - 1);
+        const carryOverPoints = this.upgradePoints;
+        const totalPointsAfter = carryOverPoints + rewardPoints;
+        
+        const firstCheck = confirm(
+            `【システム再起動：プレステージ実行】\n\n` +
+            `現在の到達PHASE: ${this.stage}\n` +
+            `--------------------------\n` +
+            `・今回のクリア報酬 : + ${rewardPoints} pt\n` +
+            `・未消費の所持分   : + ${carryOverPoints} pt\n` +
+            `・再開時の合計所持 :   ${totalPointsAfter} pt\n` +
+            `--------------------------\n` +
+            `進行状況をリセットし、ポイントを獲得してシステムを再起動しますか？`
+        );
+
+        if (firstCheck) {
+            const secondCheck = confirm(
+                "最終確認：本当によろしいですか？\n" +
+                "アップグレードと統計データ、システム稼働時間はリセットされます。\n" +
+                `合計 ${totalPointsAfter} pt を持って PHASE 1 から再起動します。`
+            );
+
+            if (secondCheck) {
+                // 新しいセーブデータを作成（完全な再起動状態）
+                const prestigeSave = {
+                    prestigeCount: (this.prestigeCount || 0) + 1,
+                    stage: 1,
+                    upgradePoints: totalPointsAfter,
+                    maxLevelRecord: 1,
+                    
+                    // 初期ステータスへリセット
+                    globalStats: {
+                        attack:  { lv: 1, val: 1, max: 20, step: 1, name: "ATTACK_POWER" },
+                        speed:   { lv: 1, val: 2.8, max: 10, step: 0.6, name: "MVMT_SPEED" },
+                        agility: { lv: 1, val: 0.07, max: 15, step: 0.012, name: "TURN_AGILITY" },
+                        maxLife: { lv: 1, val: 5, max: 10, step: 1, name: "MAX_FRAGMENTS" }
+                    },
+                    
+                    // 生命体もLv1の5体へリセット
+                    lifeFormLevels: [1, 1, 1, 1, 1],
+                    
+                    // 統計データと時間を完全に初期化
+                    stats: {
+                        destroyedBlocks: 0,
+                        totalHits: 0,
+                        totalDamage: 0,
+                        startTime: Date.now(),
+                        accumulatedTime: 0
+                    },
+                    timestamp: Date.now()
+                };
+
+                // セーブデータを上書きしてリロード
+                localStorage.setItem('anima_fragment_save', JSON.stringify(prestigeSave));
                 location.reload();
             }
         }
